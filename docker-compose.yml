@@ -1,0 +1,73 @@
+version: "3.9"
+
+services:
+  # ── LLMOps Application ──────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llmops-app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://llmops:llmops_secret@postgres:5432/llmops_db
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./src:/app/src
+      - ./prompts:/app/prompts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── PostgreSQL (prompt versions, eval results, cost logs) ─
+  postgres:
+    image: postgres:16-alpine
+    container_name: llmops-postgres
+    environment:
+      POSTGRES_USER: llmops
+      POSTGRES_PASSWORD: llmops_secret
+      POSTGRES_DB: llmops_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llmops -d llmops_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis (caching, rate limiting, feature flags) ────────
+  redis:
+    image: redis:7-alpine
+    container_name: llmops-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local

@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Time** | 3-5 hours |
-| **Difficulty** | Intermediate |
-| **Prerequisites** | Module 05 completed |
+| **Difficulty** | Intermediate-Advanced |
+| **Prerequisites** | Module 05 completed, A/B testing understood |
 
 ---
 
@@ -12,38 +12,100 @@
 
 By the end of this module, you will be able to:
 
-- Understand the core concepts of Canary Deployments for LLM Apps
-- Set up and configure the required tools and environments
-- Complete hands-on exercises that demonstrate practical skills
-- Apply these skills in real-world scenarios
-- Pass the module validation to prove your understanding
+- Implement gradual rollout of new LLM model versions with configurable traffic weights
+- Build automatic rollback logic based on error rate, latency, and quality thresholds
+- Design a ramp-up schedule that balances speed with safety
+- Monitor canary health in real time with structured metrics
+- Differentiate canary deployments from A/B testing and know when to use each
 
 ---
 
 ## Concepts
 
-### What is Canary Deployments for LLM Apps?
+### What is a Canary Deployment?
 
-Canary Deployments for LLM Apps is a fundamental component of LLMOps CI/CD: Zero to Hero. In production environments, this skill is used daily by engineers to build, deploy, and maintain reliable systems.
+A canary deployment routes a small percentage of production traffic to a new version while keeping most traffic on the proven baseline. If the canary performs well, traffic is gradually increased until the new version handles 100%. If problems are detected, traffic is instantly rolled back to the baseline.
 
-**Real-world analogy:** Think of Canary Deployments for LLM Apps like learning to read a map before navigating a city. Once you understand the fundamentals, you can find your way through any complex system.
+**Named after:** Coal miners who brought canaries into mines as early warning systems for toxic gases.
 
-### Why Does This Matter?
+### Canary vs. A/B Testing
 
-Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
-- Deploy thousands of times per day
-- Maintain 99.99% uptime
-- Scale to millions of users
-- Recover from failures in minutes
+| | Canary Deployment | A/B Testing |
+|---|---|---|
+| **Goal** | Safe rollout of new version | Compare two alternatives |
+| **Traffic split** | Starts small (5-10%), ramps up | Fixed split (often 50/50) |
+| **Duration** | Until promoted or rolled back | Until statistical significance |
+| **Decision** | Automated (health-based) | Data-driven (significance test) |
+| **Rollback** | Automatic on failure | Manual or post-analysis |
+| **Use when** | Deploying new model/prompt to prod | Comparing two prompt variants |
+
+### The Canary Lifecycle
+
+```
+  Create         Monitor         Decision
+┌────────┐    ┌──────────┐    ┌───────────┐
+│  5%    │───▶│  Check   │───▶│  Healthy? │
+│ canary │    │  health  │    └─────┬─────┘
+└────────┘    └──────────┘          │
+                                ┌───┴───┐
+                               Yes     No
+                                │       │
+                            ┌───┴───┐   │
+                            │ Ramp  │   │
+                            │ to    │   │
+                            │ 10%   │   │
+                            └───┬───┘   │
+                                │       │
+                               ...      │
+                                │       │
+                            ┌───┴───┐   │
+                            │ Ramp  │   │
+                            │ to    │   │
+                            │ 90%   │   │
+                            └───┬───┘   │
+                                │       │
+                            ┌───┴───┐   ▼
+                            │Promote│ ┌──────────┐
+                            │ 100%  │ │ Rollback │
+                            └───────┘ │   0%     │
+                                      └──────────┘
+```
+
+### Rollback Triggers
+
+The canary manager automatically rolls back when any of these conditions are met:
+
+| Trigger | Default Threshold | What It Catches |
+|---|---|---|
+| **Error rate** | > 5% | API failures, timeouts, malformed responses |
+| **P99 latency** | > 5,000 ms | Performance degradation, model slowness |
+| **Quality score** | < 0.70 | Evaluation score drops (accuracy, relevance) |
+
+### Ramp Schedule
+
+A typical ramp schedule for LLM deployments:
+
+| Step | Canary Weight | Wait Time | Min Requests |
+|---|---|---|---|
+| 1 | 5% | 5 minutes | 50 |
+| 2 | 10% | 10 minutes | 100 |
+| 3 | 25% | 15 minutes | 250 |
+| 4 | 50% | 30 minutes | 500 |
+| 5 | 75% | 30 minutes | 750 |
+| 6 | 90% | 30 minutes | 900 |
+| 7 | 100% (promoted) | - | - |
 
 ### Key Terminology
 
 | Term | Definition |
 |---|---|
-| **Core concept 1** | The foundational building block of this module |
-| **Core concept 2** | How components interact and communicate |
-| **Core concept 3** | The pattern used for reliability and scale |
-| **Best practice** | The industry-standard approach to implementation |
+| **Baseline** | The current production version serving most traffic |
+| **Canary** | The new version receiving a small percentage of traffic |
+| **Ramp-up** | Gradually increasing the canary's traffic percentage |
+| **Rollback** | Immediately routing all traffic back to the baseline |
+| **Promotion** | Making the canary the new baseline (100% traffic) |
+| **Health check** | Automated evaluation of canary metrics against thresholds |
+| **Bake time** | Minimum wait period between ramp steps |
 
 ---
 
@@ -51,77 +113,152 @@ Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
 
 ### Prerequisites Check
 
-Before starting, verify your environment:
-
 ```bash
-# Check Docker is running
-docker --version
-docker compose version
-
-# Check you have the project cloned
-ls modules/06-canary-deployments/
+python3 -c "from src.deployment.canary import CanaryManager; print('Ready')"
 ```
 
-### Exercise 1: Setup and Configuration
+### Exercise 1: Create and Monitor a Canary Deployment
 
-**Goal:** Get the foundation in place for this module.
+**Goal:** Deploy a new model version with 10% canary traffic and monitor its health.
 
-**Step 1:** Review the starter files
-```bash
-ls modules/06-canary-deployments/lab/starter/
+```python
+from src.deployment.canary import CanaryManager, CanaryConfig
+
+manager = CanaryManager()
+
+# Create deployment: gpt-4o-mini (baseline) -> gpt-4o (canary)
+deployment = manager.create_deployment(
+    name="model-upgrade-v2",
+    baseline_model="gpt-4o-mini",
+    canary_model="gpt-4o",
+    canary_weight=0.1,  # Start at 10%
+    config=CanaryConfig(
+        max_error_rate=0.05,
+        max_latency_p99_ms=3000,
+        min_quality_score=0.75,
+        min_requests_before_decision=50,
+        weight_increment=0.1,
+        ramp_interval_seconds=0,  # Instant ramp for demo
+    ),
+)
+
+print(f"Created: {deployment.name}")
+print(f"Status: {deployment.status.value}")
+print(f"Canary weight: {deployment.canary_weight:.0%}")
 ```
 
-**Step 2:** Set up the required environment
-```bash
-# Follow the specific setup for this module
-# Each command is explained below
-cd modules/06-canary-deployments/lab/starter/
+### Exercise 2: Simulate a Successful Rollout
+
+**Goal:** Simulate healthy traffic and watch the canary get promoted.
+
+```python
+import random
+
+# Simulate 500 requests with good canary performance
+for i in range(500):
+    model = manager.route_request("model-upgrade-v2")
+    manager.record_outcome(
+        "model-upgrade-v2",
+        model,
+        success=random.random() < 0.98,       # 98% success
+        latency_ms=random.gauss(250, 50),      # 250ms avg
+        quality_score=random.gauss(0.88, 0.04),  # 0.88 avg quality
+    )
+
+    # Check and ramp every 50 requests
+    if (i + 1) % 50 == 0:
+        decision = manager.maybe_promote_or_rollback("model-upgrade-v2")
+        dep = manager.get_deployment("model-upgrade-v2")
+        print(f"  Request {i + 1}: weight={dep.canary_weight:.0%}, decision={decision}")
+
+# Final status
+print("\n" + manager.get_summary("model-upgrade-v2"))
 ```
 
-**Step 3:** Verify the setup
-```bash
-# Run the validation to check your setup
-bash modules/06-canary-deployments/validation/validate.sh
+### Exercise 3: Simulate a Rollback
+
+**Goal:** Simulate a failing canary that triggers automatic rollback.
+
+```python
+# Create a new deployment
+manager.create_deployment(
+    name="bad-model-test",
+    baseline_model="gpt-4o-mini",
+    canary_model="bad-model-v1",
+    canary_weight=0.1,
+    config=CanaryConfig(
+        max_error_rate=0.05,
+        min_requests_before_decision=30,
+        ramp_interval_seconds=0,
+    ),
+)
+
+# Simulate traffic with bad canary performance
+for i in range(100):
+    model = manager.route_request("bad-model-test")
+    is_canary = model == "bad-model-v1"
+
+    if is_canary:
+        # Canary has high error rate and slow latency
+        manager.record_outcome(
+            "bad-model-test", model,
+            success=random.random() < 0.80,        # Only 80% success (bad!)
+            latency_ms=random.gauss(2000, 500),     # Very slow
+            quality_score=random.gauss(0.55, 0.1),  # Low quality
+        )
+    else:
+        manager.record_outcome(
+            "bad-model-test", model,
+            success=random.random() < 0.98,
+            latency_ms=random.gauss(200, 30),
+            quality_score=random.gauss(0.88, 0.04),
+        )
+
+    if (i + 1) % 30 == 0:
+        decision = manager.maybe_promote_or_rollback("bad-model-test")
+        print(f"  Request {i + 1}: decision={decision}")
+
+print("\n" + manager.get_summary("bad-model-test"))
 ```
 
-**What you should see:** The validation script will show PASS for setup-related checks.
+### Exercise 4: Review Deployment History
 
-### Exercise 2: Core Implementation
+**Goal:** Inspect the audit trail of canary deployment decisions.
 
-**Goal:** Implement the main concept of this module.
+```python
+import json
 
-Follow the detailed instructions in the starter directory. The solution directory contains the reference implementation if you get stuck.
+# Check history for both deployments
+for name in ["model-upgrade-v2", "bad-model-test"]:
+    dep = manager.get_deployment(name)
+    print(f"\n--- {name} ({dep.status.value}) ---")
+    for event in dep.history:
+        print(f"  {event['event']}: {json.dumps({k: v for k, v in event.items() if k != 'event'})}")
 
-**Key points:**
-- Read each instruction carefully before executing
-- Understand WHY each step is needed, not just WHAT to do
-- If something fails, check the troubleshooting section below
-
-### Exercise 3: Integration and Testing
-
-**Goal:** Connect this module's work with the broader system.
-
-- Verify your implementation works with previous modules
-- Run all tests and validation scripts
-- Document what you learned
+# Health check
+for name in ["model-upgrade-v2", "bad-model-test"]:
+    health = manager.check_health(name)
+    print(f"\n{name} health: {'HEALTHY' if health['healthy'] else 'UNHEALTHY'}")
+    if health.get("issues"):
+        for issue in health["issues"]:
+            print(f"  Issue: {issue}")
+```
 
 ---
 
 ## Starter Files
 
 Check `lab/starter/` for:
-- Configuration templates to fill in
-- Skeleton code to complete
-- Setup scripts to run
+- Skeleton CanaryManager class to complete
+- Configuration templates for different ramp schedules
+- Simulation scripts
 
 ## Solution Files
 
 If you get stuck, `lab/solution/` contains:
-- Complete working configuration
-- Fully implemented code
-- Expected output examples
-
-> **Important:** Try to complete the exercises yourself first! Looking at solutions too early reduces learning.
+- Fully implemented CanaryManager with all features
+- Working simulation for both success and rollback scenarios
+- Expected output from each exercise
 
 ---
 
@@ -129,32 +266,31 @@ If you get stuck, `lab/solution/` contains:
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Skipping prerequisites | Module exercises fail | Complete previous modules first |
-| Copy-pasting without understanding | Cannot troubleshoot issues | Read explanations, not just commands |
-| Not checking validation | Think you are done but are not | Run validate.sh after each exercise |
-| Ignoring error messages | Problems compound | Read errors carefully, they tell you what is wrong |
+| Starting canary at too high weight | Large blast radius on failure | Start at 5-10% and ramp gradually |
+| No minimum request threshold | Decisions made on insufficient data | Set `min_requests_before_decision` to 50+ |
+| Forgetting to monitor baseline | Cannot compare relative performance | Track metrics for both baseline and canary |
+| Ramp interval too short | Insufficient observation time | Set bake time to at least 5 minutes between ramps |
+| No manual rollback path | Cannot override automation | Always expose a manual rollback endpoint |
 
 ---
 
 ## Self-Check Questions
 
-Test your understanding before moving on:
-
-1. What is the main purpose of Canary Deployments for LLM Apps?
-2. How does this connect to the previous module?
-3. What would happen in production without this?
-4. Can you explain this concept to a non-technical person?
-5. What are three things that could go wrong, and how would you fix them?
+1. Why start a canary at 5-10% instead of 50%?
+2. What three metrics should trigger an automatic rollback?
+3. How does a canary deployment differ from an A/B test in terms of decision-making?
+4. What is "bake time" and why is it important?
+5. Describe a scenario where the canary is healthy on all metrics but you still should not promote it.
 
 ---
 
 ## You Know You Have Completed This Module When...
 
-- [ ] All exercises completed
+- [ ] Created a canary deployment with configurable thresholds
+- [ ] Simulated a successful rollout with gradual ramp-up
+- [ ] Triggered and observed an automatic rollback
+- [ ] Reviewed the deployment history audit trail
 - [ ] Validation script passes: `bash modules/06-canary-deployments/validation/validate.sh`
-- [ ] You can explain the concepts without looking at notes
-- [ ] You understand how this applies to real-world scenarios
-- [ ] Self-check questions answered confidently
 
 ---
 
@@ -162,24 +298,19 @@ Test your understanding before moving on:
 
 ### Common Issues
 
-**Issue: Validation script fails**
-- Re-read the exercise instructions
-- Check that Docker containers are running
-- Verify you are in the correct directory
-- Compare your work with the solution files
+**Issue: Canary never ramps up**
+- Check that `ramp_interval_seconds` has elapsed since the last ramp
+- Verify `min_requests_before_decision` is met
+- For testing, set `ramp_interval_seconds=0`
 
-**Issue: Docker container not starting**
-```bash
-docker compose logs <service-name>  # Check logs
-docker compose down && docker compose up -d  # Restart
-```
+**Issue: Rollback not triggering**
+- Verify canary metrics exceed the threshold (not baseline metrics)
+- Check `min_requests_before_decision` is met before rollback logic runs
 
-**Issue: Permission denied**
-```bash
-chmod +x validation/validate.sh  # Make script executable
-sudo chown -R $USER .           # Fix ownership (Linux)
-```
+**Issue: All traffic going to baseline**
+- Check deployment status is `IN_PROGRESS` (not `ROLLED_BACK` or `PROMOTED`)
+- Verify `canary_weight` is greater than 0
 
 ---
 
-**Next: [Module 07 →](../07-cost-tracking/)**
+**Next: [Module 07 - Cost Tracking and Optimization -->](../07-cost-tracking/)**

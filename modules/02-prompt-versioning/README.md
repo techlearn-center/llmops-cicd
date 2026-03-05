@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Time** | 3-5 hours |
-| **Difficulty** | Beginner |
-| **Prerequisites** | Module 01 completed |
+| **Difficulty** | Beginner-Intermediate |
+| **Prerequisites** | Module 01 completed, PostgreSQL and Redis running |
 
 ---
 
@@ -12,38 +12,98 @@
 
 By the end of this module, you will be able to:
 
-- Understand the core concepts of Prompt Versioning and Management
-- Set up and configure the required tools and environments
-- Complete hands-on exercises that demonstrate practical skills
-- Apply these skills in real-world scenarios
-- Pass the module validation to prove your understanding
+- Design a prompt versioning schema with semantic versioning, content hashing, and metadata
+- Implement both git-based and database-backed prompt storage strategies
+- Build an A/B comparison workflow that diffs two prompt versions side-by-side
+- Tag and retrieve prompt versions by environment (dev, staging, prod)
+- Integrate prompt versioning into a team workflow with review and approval gates
 
 ---
 
 ## Concepts
 
-### What is Prompt Versioning and Management?
+### Why Version Prompts?
 
-Prompt Versioning and Management is a fundamental component of LLMOps CI/CD: Zero to Hero. In production environments, this skill is used daily by engineers to build, deploy, and maintain reliable systems.
+In traditional software, code changes go through version control, code review, and CI before reaching production. Prompt changes deserve the same rigor because:
 
-**Real-world analogy:** Think of Prompt Versioning and Management like learning to read a map before navigating a city. Once you understand the fundamentals, you can find your way through any complex system.
+1. **A single word change can break output quality.** Changing "concise" to "brief" in a summarization prompt can shift output length by 40%.
+2. **Rollback needs to be instant.** If a new prompt degrades user experience, you need to revert to the previous version within seconds, not minutes.
+3. **Audit trails matter.** Compliance and debugging require knowing exactly which prompt version generated each output.
+4. **Team collaboration.** Multiple engineers editing prompts without version control leads to conflicts and lost work.
 
-### Why Does This Matter?
+### Storage Strategies
 
-Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
-- Deploy thousands of times per day
-- Maintain 99.99% uptime
-- Scale to millions of users
-- Recover from failures in minutes
+#### Git-Based Versioning
+
+Store prompts as files in your repository:
+
+```
+prompts/
+  summarizer/
+    v1.0.txt      # "Summarize: {text}"
+    v1.1.txt      # "Summarize in bullets: {text}"
+    v2.0.txt      # Complete rewrite
+    metadata.json  # tags, author, created_at per version
+```
+
+**Pros:** Free, works with existing code review tools, integrates with CI/CD naturally.
+**Cons:** Tight coupling to deploy cycles, harder to do runtime version switching.
+
+#### Database-Backed Versioning
+
+Store prompts in PostgreSQL with full metadata:
+
+```sql
+CREATE TABLE prompt_versions (
+    id            SERIAL PRIMARY KEY,
+    name          VARCHAR(255) NOT NULL,
+    version       VARCHAR(32)  NOT NULL,
+    template      TEXT         NOT NULL,
+    content_hash  VARCHAR(64)  NOT NULL,
+    variables     JSONB        DEFAULT '[]',
+    tags          JSONB        DEFAULT '[]',
+    author        VARCHAR(255) DEFAULT 'system',
+    description   TEXT         DEFAULT '',
+    created_at    TIMESTAMPTZ  DEFAULT NOW(),
+    UNIQUE(name, version)
+);
+```
+
+**Pros:** Runtime switching, rich queries, decoupled from deploys.
+**Cons:** Extra infrastructure, need migration tooling.
+
+#### Hybrid Approach (Recommended)
+
+Use git for prompt development and review. On merge to `main`, a CI step pushes the prompt to the database so the running application can retrieve it at runtime.
+
+### Semantic Versioning for Prompts
+
+```
+MAJOR.MINOR
+
+MAJOR bump: Breaking change to output format, variable names, or behavior
+MINOR bump: Refinements that maintain the same output structure
+```
+
+Examples:
+- `1.0` -> `1.1`: Tweaked wording for clarity (minor)
+- `1.5` -> `2.0`: Changed from paragraph to bullet points (major - output format changed)
+- `2.0` -> `2.1`: Added "be concise" instruction (minor)
+
+### Content Hash Deduplication
+
+Every prompt template is SHA-256 hashed before storage. If you try to save the same template text twice, the store recognizes the duplicate and returns the existing version instead of creating a new one. This prevents version clutter from accidental re-saves.
 
 ### Key Terminology
 
 | Term | Definition |
 |---|---|
-| **Core concept 1** | The foundational building block of this module |
-| **Core concept 2** | How components interact and communicate |
-| **Core concept 3** | The pattern used for reliability and scale |
-| **Best practice** | The industry-standard approach to implementation |
+| **Prompt template** | A parameterized string with `{variable}` placeholders |
+| **Content hash** | SHA-256 digest of the template text, used for deduplication |
+| **Semantic version** | `MAJOR.MINOR` format tracking breaking vs. non-breaking changes |
+| **Tag** | A label like `prod`, `staging`, `experiment-42` attached to a version |
+| **Prompt diff** | A comparison showing what changed between two versions |
+| **Render** | Filling template variables with actual values to produce the final prompt |
 
 ---
 
@@ -51,75 +111,160 @@ Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
 
 ### Prerequisites Check
 
-Before starting, verify your environment:
-
 ```bash
-# Check Docker is running
-docker --version
-docker compose version
+# Verify services from Module 01
+docker compose exec postgres pg_isready -U llmops
+docker compose exec redis redis-cli ping
 
-# Check you have the project cloned
-ls modules/02-prompt-versioning/
+# Verify Python imports
+python3 -c "from src.versioning.prompt_store import PromptStore; print('Ready')"
 ```
 
-### Exercise 1: Setup and Configuration
+### Exercise 1: Build a Prompt Library
 
-**Goal:** Get the foundation in place for this module.
+**Goal:** Create a library of versioned prompts for different tasks.
 
-**Step 1:** Review the starter files
-```bash
-ls modules/02-prompt-versioning/lab/starter/
+```python
+from src.versioning.prompt_store import PromptStore
+
+store = PromptStore("postgresql://llmops:llmops_secret@localhost:5432/llmops_db")
+
+# --- Summarizer prompt family ---
+store.save(
+    "summarizer",
+    "Summarize the following text in one paragraph:\n\n{text}",
+    author="engineer-a",
+    description="Basic single-paragraph summarizer",
+    tags=["prod", "v1"],
+)
+
+store.save(
+    "summarizer",
+    "You are a professional editor. Summarize the following text in "
+    "3 concise bullet points:\n\n{text}",
+    author="engineer-a",
+    description="Bullet-point format for dashboards",
+    tags=["staging"],
+)
+
+store.save(
+    "summarizer",
+    "You are a professional editor. Summarize the following text in "
+    "3 concise bullet points. Each bullet must be under 20 words:\n\n{text}",
+    author="engineer-b",
+    description="Added word limit per bullet",
+    tags=["staging", "experiment"],
+)
+
+# --- Classifier prompt family ---
+store.save(
+    "classifier",
+    "Classify the following support ticket into one of these categories: "
+    "billing, technical, account, other.\n\nTicket: {ticket}\n\nCategory:",
+    author="engineer-a",
+    description="Support ticket classifier v1",
+    tags=["prod"],
+)
+
+# List everything
+for name in ["summarizer", "classifier"]:
+    versions = store.list_versions(name)
+    print(f"\n{name} ({len(versions)} versions):")
+    for v in versions:
+        print(f"  v{v.version} [{', '.join(v.tags)}] - {v.description}")
 ```
 
-**Step 2:** Set up the required environment
-```bash
-# Follow the specific setup for this module
-# Each command is explained below
-cd modules/02-prompt-versioning/lab/starter/
+### Exercise 2: Compare and Diff Versions
+
+**Goal:** Build a side-by-side comparison workflow.
+
+```python
+# Compare summarizer v1.0 vs v1.1
+diff = store.compare("summarizer", "1.0", "1.1")
+print(f"Template changed: {diff.template_changed}")
+print(f"Variables added:   {diff.variables_added}")
+print(f"Variables removed:  {diff.variables_removed}")
+print(f"\n--- v{diff.from_version} ---")
+print(diff.from_template)
+print(f"\n--- v{diff.to_version} ---")
+print(diff.to_template)
+
+# Compare v1.1 vs v1.2 (added word limit)
+diff2 = store.compare("summarizer", "1.1", "1.2")
+print(f"\nv1.1 -> v1.2 changed: {diff2.template_changed}")
 ```
 
-**Step 3:** Verify the setup
-```bash
-# Run the validation to check your setup
-bash modules/02-prompt-versioning/validation/validate.sh
+### Exercise 3: Tag-Based Retrieval and Rendering
+
+**Goal:** Retrieve prompts by tag and render them with actual data.
+
+```python
+# Get the current production version
+prod_prompt = store.get("summarizer", tag="prod")
+print(f"Production: v{prod_prompt.version}")
+
+# Get the latest staging version
+staging_prompt = store.get("summarizer", tag="staging")
+print(f"Staging: v{staging_prompt.version}")
+
+# Render with actual data
+article = (
+    "Artificial intelligence is rapidly changing the healthcare industry. "
+    "New diagnostic tools powered by deep learning can detect diseases earlier "
+    "than traditional methods, potentially saving millions of lives each year."
+)
+
+rendered = store.render("summarizer", {"text": article}, version="1.0")
+print(f"\nRendered prompt:\n{rendered}")
 ```
 
-**What you should see:** The validation script will show PASS for setup-related checks.
+### Exercise 4: Build a Git-Based Prompt Workflow
 
-### Exercise 2: Core Implementation
+**Goal:** Store prompts as files and auto-sync to the database on commit.
 
-**Goal:** Implement the main concept of this module.
+```bash
+# Create prompt files
+mkdir -p prompts/summarizer
+```
 
-Follow the detailed instructions in the starter directory. The solution directory contains the reference implementation if you get stuck.
+```python
+# prompts/summarizer/v1.0.txt
+"""Summarize the following text in one paragraph:
 
-**Key points:**
-- Read each instruction carefully before executing
-- Understand WHY each step is needed, not just WHAT to do
-- If something fails, check the troubleshooting section below
+{text}"""
 
-### Exercise 3: Integration and Testing
+# prompts/sync_to_db.py - Run this in CI after merging to main
+import os
+import glob
+from src.versioning.prompt_store import PromptStore
 
-**Goal:** Connect this module's work with the broader system.
+store = PromptStore(os.environ["DATABASE_URL"])
 
-- Verify your implementation works with previous modules
-- Run all tests and validation scripts
-- Document what you learned
+for prompt_dir in glob.glob("prompts/*/"):
+    name = os.path.basename(prompt_dir.rstrip("/"))
+    for filepath in sorted(glob.glob(f"{prompt_dir}*.txt")):
+        version = os.path.basename(filepath).replace(".txt", "").lstrip("v")
+        with open(filepath) as f:
+            template = f.read().strip()
+        store.save(name, template, description=f"Synced from git ({filepath})")
+        print(f"Synced {name} v{version}")
+```
 
 ---
 
 ## Starter Files
 
 Check `lab/starter/` for:
-- Configuration templates to fill in
-- Skeleton code to complete
-- Setup scripts to run
+- Skeleton `PromptStore` class to complete
+- SQL migration scripts for the prompt_versions table
+- Sample prompt templates in `prompts/`
 
 ## Solution Files
 
 If you get stuck, `lab/solution/` contains:
-- Complete working configuration
-- Fully implemented code
-- Expected output examples
+- Fully implemented PromptStore with all methods
+- Working sync script for git-to-database workflow
+- Expected output from each exercise
 
 > **Important:** Try to complete the exercises yourself first! Looking at solutions too early reduces learning.
 
@@ -129,32 +274,30 @@ If you get stuck, `lab/solution/` contains:
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Skipping prerequisites | Module exercises fail | Complete previous modules first |
-| Copy-pasting without understanding | Cannot troubleshoot issues | Read explanations, not just commands |
-| Not checking validation | Think you are done but are not | Run validate.sh after each exercise |
-| Ignoring error messages | Problems compound | Read errors carefully, they tell you what is wrong |
+| Saving identical templates | No new version created | This is correct behavior -- content hash deduplication prevents duplicates |
+| Forgetting `{variable}` syntax | `KeyError` on render | Use `{text}` not `{{text}}` or `$text` |
+| Not bumping major version on format changes | Downstream consumers break | Bump major when output structure changes |
+| Hardcoding database URL | Works locally, fails in CI | Use `DATABASE_URL` environment variable |
 
 ---
 
 ## Self-Check Questions
 
-Test your understanding before moving on:
-
-1. What is the main purpose of Prompt Versioning and Management?
-2. How does this connect to the previous module?
-3. What would happen in production without this?
-4. Can you explain this concept to a non-technical person?
-5. What are three things that could go wrong, and how would you fix them?
+1. Why is content-hash deduplication important for prompt versioning?
+2. When should you bump the major version vs. the minor version?
+3. What are the trade-offs between git-based and database-backed prompt storage?
+4. How would you implement a prompt approval workflow in a team of 5 engineers?
+5. What happens if two team members save different prompts at the same time?
 
 ---
 
 ## You Know You Have Completed This Module When...
 
-- [ ] All exercises completed
+- [ ] Created at least 3 versioned prompts in the prompt store
+- [ ] Compared two versions and understood the diff output
+- [ ] Retrieved a prompt by tag and rendered it with variables
 - [ ] Validation script passes: `bash modules/02-prompt-versioning/validation/validate.sh`
-- [ ] You can explain the concepts without looking at notes
-- [ ] You understand how this applies to real-world scenarios
-- [ ] Self-check questions answered confidently
+- [ ] You can explain the hybrid git + database approach to a colleague
 
 ---
 
@@ -162,24 +305,27 @@ Test your understanding before moving on:
 
 ### Common Issues
 
-**Issue: Validation script fails**
-- Re-read the exercise instructions
-- Check that Docker containers are running
-- Verify you are in the correct directory
-- Compare your work with the solution files
-
-**Issue: Docker container not starting**
+**Issue: PostgreSQL connection refused**
 ```bash
-docker compose logs <service-name>  # Check logs
-docker compose down && docker compose up -d  # Restart
+# Verify the container is running
+docker compose ps postgres
+# Restart if needed
+docker compose restart postgres
 ```
 
-**Issue: Permission denied**
-```bash
-chmod +x validation/validate.sh  # Make script executable
-sudo chown -R $USER .           # Fix ownership (Linux)
+**Issue: "relation prompt_versions does not exist"**
+```python
+# The PromptStore auto-creates tables on init.
+# Make sure you are passing the correct database URL.
+store = PromptStore("postgresql://llmops:llmops_secret@localhost:5432/llmops_db")
+```
+
+**Issue: Version not incrementing**
+```python
+# Content hash dedup: if the template text is identical to the last version,
+# no new version is created. Change the template to get a new version.
 ```
 
 ---
 
-**Next: [Module 03 →](../03-eval-pipeline-design/)**
+**Next: [Module 03 - Evaluation Pipeline Design -->](../03-eval-pipeline-design/)**

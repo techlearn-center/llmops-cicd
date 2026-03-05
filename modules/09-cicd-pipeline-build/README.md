@@ -1,10 +1,10 @@
-# Module 09: Building the CI-CD Pipeline
+# Module 09: CI/CD Pipeline Design for LLM Applications
 
 | | |
 |---|---|
 | **Time** | 3-5 hours |
 | **Difficulty** | Advanced |
-| **Prerequisites** | Module 08 completed |
+| **Prerequisites** | Module 08 completed, familiarity with GitHub Actions |
 
 ---
 
@@ -12,38 +12,128 @@
 
 By the end of this module, you will be able to:
 
-- Understand the core concepts of Building the CI-CD Pipeline
-- Set up and configure the required tools and environments
-- Complete hands-on exercises that demonstrate practical skills
-- Apply these skills in real-world scenarios
-- Pass the module validation to prove your understanding
+- Design a GitHub Actions CI/CD pipeline tailored for LLM applications
+- Implement multi-stage pipelines with lint, test, evaluation, and deployment stages
+- Configure tiered testing: offline checks on every commit, online evaluation on merge
+- Build Docker images with prompt artifacts and model configuration baked in
+- Set up quality gates that block deployment when evaluation scores regress
 
 ---
 
 ## Concepts
 
-### What is Building the CI-CD Pipeline?
+### How LLM CI/CD Differs from Standard CI/CD
 
-Building the CI-CD Pipeline is a fundamental component of LLMOps CI/CD: Zero to Hero. In production environments, this skill is used daily by engineers to build, deploy, and maintain reliable systems.
+A typical software CI/CD pipeline runs lint, unit tests, and deploys. LLM CI/CD adds several unique stages:
 
-**Real-world analogy:** Think of Building the CI-CD Pipeline like learning to read a map before navigating a city. Once you understand the fundamentals, you can find your way through any complex system.
+```
+Standard CI/CD:        LLM CI/CD:
+┌──────────┐           ┌──────────┐
+│   Lint   │           │   Lint   │
+└────┬─────┘           └────┬─────┘
+     │                      │
+┌────┴─────┐           ┌────┴─────┐
+│  Tests   │           │  Tests   │
+└────┬─────┘           └────┬─────┘
+     │                      │
+┌────┴─────┐           ┌────┴──────────┐
+│  Build   │           │ Prompt Eval   │  <-- NEW: run evaluation pipeline
+└────┬─────┘           └────┬──────────┘
+     │                      │
+┌────┴─────┐           ┌────┴──────────┐
+│  Deploy  │           │ Regression    │  <-- NEW: compare against baseline
+└──────────┘           │ Detection     │
+                       └────┬──────────┘
+                            │
+                       ┌────┴──────────┐
+                       │ Cost Estimate │  <-- NEW: predict deployment cost
+                       └────┬──────────┘
+                            │
+                       ┌────┴──────────┐
+                       │ Canary Deploy │  <-- NEW: gradual rollout
+                       └────┬──────────┘
+                            │
+                       ┌────┴──────────┐
+                       │ Health Gate   │  <-- NEW: auto-promote or rollback
+                       └──────────────┘
+```
 
-### Why Does This Matter?
+### Pipeline Architecture
 
-Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
-- Deploy thousands of times per day
-- Maintain 99.99% uptime
-- Scale to millions of users
-- Recover from failures in minutes
+The pipeline in `.github/workflows/llm-ci.yml` implements five stages:
+
+#### Stage 1: Lint and Type Check
+Runs ruff (linter) and mypy (type checker) on every push. Catches syntax errors, import issues, and type mismatches before any expensive operations.
+
+#### Stage 2: Unit Tests
+Runs pytest on all test files excluding integration and e2e tests. These tests are fast, free (no API calls), and validate code logic.
+
+#### Stage 3: Prompt Evaluation
+Runs the evaluation pipeline in offline mode against a test suite. Checks that the prompt store initializes correctly, evaluators produce valid scores, canary routing works, and cost tracking records properly.
+
+#### Stage 4: Docker Build
+Builds the Docker image without pushing. Validates that the Dockerfile is correct and all dependencies install successfully.
+
+#### Stage 5: CI Gate
+A summary job that checks all previous stages and produces a single pass/fail signal for the PR.
+
+### Workflow Triggers
+
+```yaml
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "src/**"       # Source code changes
+      - "prompts/**"   # Prompt template changes
+      - "tests/**"     # Test changes
+  pull_request:
+    branches: [main]
+```
+
+Key design decisions:
+- **Path filtering:** Only run on relevant file changes (not documentation updates)
+- **Branch protection:** Run on PRs to main for quality gates
+- **Push to main:** Run full pipeline on merge for deployment
+
+### Secrets Management
+
+```yaml
+env:
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+Best practices:
+- Never hardcode API keys in workflows or code
+- Use GitHub Secrets for sensitive values
+- Use different API keys for CI (with lower rate limits) vs. production
+- Set spending limits on CI API keys
+
+### Caching for Faster Builds
+
+```yaml
+- uses: actions/setup-python@v5
+  with:
+    python-version: "3.11"
+    cache: pip  # Caches pip dependencies between runs
+```
+
+Additional caching opportunities:
+- Docker layer caching with `cache-from: type=gha`
+- Evaluation result caching (store baseline scores as artifacts)
+- Model response caching for deterministic re-evaluation
 
 ### Key Terminology
 
 | Term | Definition |
 |---|---|
-| **Core concept 1** | The foundational building block of this module |
-| **Core concept 2** | How components interact and communicate |
-| **Core concept 3** | The pattern used for reliability and scale |
-| **Best practice** | The industry-standard approach to implementation |
+| **Workflow** | A YAML file defining a CI/CD pipeline in GitHub Actions |
+| **Job** | A unit of work within a workflow that runs on a single runner |
+| **Step** | A single command or action within a job |
+| **Quality gate** | A required check that must pass before merging or deploying |
+| **Artifact** | A file produced by one job and consumed by another (test results, reports) |
+| **Matrix strategy** | Running the same job across multiple configurations in parallel |
+| **Path filter** | Only triggering a workflow when specific files change |
 
 ---
 
@@ -51,77 +141,179 @@ Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
 
 ### Prerequisites Check
 
-Before starting, verify your environment:
-
 ```bash
-# Check Docker is running
-docker --version
-docker compose version
+# Verify the workflow file exists
+ls .github/workflows/llm-ci.yml
 
-# Check you have the project cloned
-ls modules/09-cicd-pipeline-build/
+# Verify you have a GitHub repo
+git remote -v
 ```
 
-### Exercise 1: Setup and Configuration
+### Exercise 1: Understand the Pipeline
 
-**Goal:** Get the foundation in place for this module.
+**Goal:** Read and annotate the existing CI workflow.
 
-**Step 1:** Review the starter files
 ```bash
-ls modules/09-cicd-pipeline-build/lab/starter/
+# Open the workflow file
+cat .github/workflows/llm-ci.yml
 ```
 
-**Step 2:** Set up the required environment
+Answer these questions:
+1. How many jobs does the pipeline have?
+2. Which jobs run in parallel? Which depend on others?
+3. What happens if the lint job fails?
+4. Where is the OPENAI_API_KEY used, and what happens without it?
+
+### Exercise 2: Run the Pipeline Locally
+
+**Goal:** Execute each pipeline stage locally to verify it works before pushing.
+
 ```bash
-# Follow the specific setup for this module
-# Each command is explained below
-cd modules/09-cicd-pipeline-build/lab/starter/
+# Stage 1: Lint
+pip install ruff mypy
+ruff check src/ || echo "Lint issues found"
+mypy src/ --ignore-missing-imports || echo "Type issues found"
+
+# Stage 2: Unit tests (create a minimal test first)
+mkdir -p tests
 ```
 
-**Step 3:** Verify the setup
-```bash
-# Run the validation to check your setup
-bash modules/09-cicd-pipeline-build/validation/validate.sh
+Create `tests/test_smoke.py`:
+
+```python
+"""Smoke tests that verify core modules import and initialize correctly."""
+
+def test_prompt_store_init():
+    from src.versioning.prompt_store import PromptStore
+    store = PromptStore()
+    assert store is not None
+
+def test_eval_pipeline_init():
+    from src.evaluation.eval_pipeline import EvalPipeline
+    pipeline = EvalPipeline()
+    assert pipeline is not None
+
+def test_canary_manager_init():
+    from src.deployment.canary import CanaryManager
+    manager = CanaryManager()
+    assert manager is not None
+
+def test_cost_tracker_init():
+    from src.tracking.cost_tracker import CostTracker
+    tracker = CostTracker()
+    assert tracker is not None
+
+def test_prompt_store_save_and_retrieve():
+    from src.versioning.prompt_store import PromptStore
+    store = PromptStore()
+    version = store.save("ci-test", "Hello {name}", author="ci")
+    assert version.version == "1.0"
+    retrieved = store.get("ci-test")
+    assert retrieved is not None
+    assert retrieved.template == "Hello {name}"
+
+def test_cost_tracker_record():
+    from src.tracking.cost_tracker import CostTracker
+    tracker = CostTracker()
+    record = tracker.record("gpt-4o-mini", 500, 150)
+    assert record.total_tokens == 650
+    assert record.cost_usd > 0
 ```
 
-**What you should see:** The validation script will show PASS for setup-related checks.
+Run the tests:
 
-### Exercise 2: Core Implementation
+```bash
+pytest tests/test_smoke.py -v
+```
 
-**Goal:** Implement the main concept of this module.
+### Exercise 3: Add a Prompt Evaluation Stage
 
-Follow the detailed instructions in the starter directory. The solution directory contains the reference implementation if you get stuck.
+**Goal:** Add a CI step that evaluates prompts and fails on regression.
 
-**Key points:**
-- Read each instruction carefully before executing
-- Understand WHY each step is needed, not just WHAT to do
-- If something fails, check the troubleshooting section below
+Create `scripts/ci_eval.py`:
 
-### Exercise 3: Integration and Testing
+```python
+"""CI script: run prompt evaluation and exit with non-zero on failure."""
+import asyncio
+import sys
+from src.evaluation.eval_pipeline import EvalPipeline, TestCase
 
-**Goal:** Connect this module's work with the broader system.
+REQUIRED_SCORE = 0.6  # Minimum average score to pass CI
 
-- Verify your implementation works with previous modules
-- Run all tests and validation scripts
-- Document what you learned
+TEST_CASES = [
+    TestCase(
+        input_text="Summarize: AI is transforming healthcare with faster diagnostics.",
+        expected_output="AI transforms healthcare through faster diagnostics.",
+    ),
+    TestCase(
+        input_text="Summarize: Climate change affects global food production.",
+        expected_output="Climate change impacts global food production.",
+    ),
+    TestCase(
+        input_text="Summarize: Remote work has become standard since 2020.",
+        expected_output="Remote work became standard after 2020.",
+    ),
+]
+
+async def main():
+    pipeline = EvalPipeline()
+    report = await pipeline.run_evaluation(
+        prompt_name="ci-summarizer",
+        test_cases=TEST_CASES,
+        metrics=["accuracy", "relevance", "toxicity"],
+    )
+
+    print(EvalPipeline.generate_report(report))
+
+    # Check quality gate
+    for metric, score in report.avg_scores.items():
+        if score < REQUIRED_SCORE:
+            print(f"\nFAILED: {metric} score {score:.2%} < {REQUIRED_SCORE:.2%}")
+            sys.exit(1)
+
+    if report.regression_detected:
+        print("\nFAILED: Regression detected")
+        sys.exit(1)
+
+    print("\nPASSED: All quality gates met")
+    sys.exit(0)
+
+asyncio.run(main())
+```
+
+### Exercise 4: Configure Branch Protection
+
+**Goal:** Set up GitHub branch protection that requires the CI to pass.
+
+Steps (in GitHub UI):
+1. Go to Settings > Branches > Add rule
+2. Branch name pattern: `main`
+3. Check "Require status checks to pass before merging"
+4. Add these required checks:
+   - `Lint & Type Check`
+   - `Unit Tests`
+   - `Prompt Evaluation`
+   - `CI Gate`
+5. Check "Require branches to be up to date before merging"
+6. Save
+
+Now PRs to main cannot be merged unless all CI stages pass.
 
 ---
 
 ## Starter Files
 
 Check `lab/starter/` for:
-- Configuration templates to fill in
-- Skeleton code to complete
-- Setup scripts to run
+- Skeleton GitHub Actions workflow
+- Minimal test files
+- CI evaluation script template
 
 ## Solution Files
 
 If you get stuck, `lab/solution/` contains:
-- Complete working configuration
-- Fully implemented code
-- Expected output examples
-
-> **Important:** Try to complete the exercises yourself first! Looking at solutions too early reduces learning.
+- Complete workflow with all stages
+- Full test suite
+- Working CI evaluation script
 
 ---
 
@@ -129,32 +321,31 @@ If you get stuck, `lab/solution/` contains:
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Skipping prerequisites | Module exercises fail | Complete previous modules first |
-| Copy-pasting without understanding | Cannot troubleshoot issues | Read explanations, not just commands |
-| Not checking validation | Think you are done but are not | Run validate.sh after each exercise |
-| Ignoring error messages | Problems compound | Read errors carefully, they tell you what is wrong |
+| Running expensive LLM tests on every commit | Slow CI, high costs | Use offline mode on commits, online on merge |
+| No path filtering | CI runs on README changes | Add `paths:` filter to workflow triggers |
+| Hardcoded API keys in workflow | Security vulnerability | Use GitHub Secrets (`secrets.OPENAI_API_KEY`) |
+| No CI gate job | Individual job failures are easy to miss | Add a summary job that checks all dependencies |
+| Not caching pip dependencies | Slow installs on every run | Use `cache: pip` in setup-python action |
 
 ---
 
 ## Self-Check Questions
 
-Test your understanding before moving on:
-
-1. What is the main purpose of Building the CI-CD Pipeline?
-2. How does this connect to the previous module?
-3. What would happen in production without this?
-4. Can you explain this concept to a non-technical person?
-5. What are three things that could go wrong, and how would you fix them?
+1. What are the five stages of an LLM CI/CD pipeline?
+2. Why do we need path filtering in workflow triggers?
+3. How do you prevent expensive LLM API calls from running on every commit?
+4. What is a quality gate and how does it block bad deployments?
+5. How would you add a cost estimation stage to the pipeline?
 
 ---
 
 ## You Know You Have Completed This Module When...
 
-- [ ] All exercises completed
+- [ ] Read and understood the `.github/workflows/llm-ci.yml` workflow
+- [ ] Ran all pipeline stages locally (lint, test, eval)
+- [ ] Created smoke tests that verify module initialization
+- [ ] Written a CI evaluation script with quality gates
 - [ ] Validation script passes: `bash modules/09-cicd-pipeline-build/validation/validate.sh`
-- [ ] You can explain the concepts without looking at notes
-- [ ] You understand how this applies to real-world scenarios
-- [ ] Self-check questions answered confidently
 
 ---
 
@@ -162,24 +353,20 @@ Test your understanding before moving on:
 
 ### Common Issues
 
-**Issue: Validation script fails**
-- Re-read the exercise instructions
-- Check that Docker containers are running
-- Verify you are in the correct directory
-- Compare your work with the solution files
+**Issue: GitHub Actions workflow not triggering**
+- Check that the file is at exactly `.github/workflows/llm-ci.yml`
+- Verify the branch name matches the `on.push.branches` list
+- Check that changed files match the `paths` filter
 
-**Issue: Docker container not starting**
-```bash
-docker compose logs <service-name>  # Check logs
-docker compose down && docker compose up -d  # Restart
-```
+**Issue: "Module not found" errors in CI**
+- The repo root needs to be in `PYTHONPATH`
+- Add `PYTHONPATH: .` to the env section, or install the package
 
-**Issue: Permission denied**
-```bash
-chmod +x validation/validate.sh  # Make script executable
-sudo chown -R $USER .           # Fix ownership (Linux)
-```
+**Issue: CI passes locally but fails on GitHub**
+- Check Python version matches (3.11)
+- Verify all dependencies are in `requirements.txt`
+- Check that no tests depend on local files or environment variables
 
 ---
 
-**Next: [Module 10 →](../10-production-llmops/)**
+**Next: [Module 10 - Production LLMOps Platform -->](../10-production-llmops/)**

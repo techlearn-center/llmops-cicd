@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Time** | 3-5 hours |
-| **Difficulty** | Advanced |
+| **Difficulty** | Intermediate-Advanced |
 | **Prerequisites** | Module 06 completed |
 
 ---
@@ -12,38 +12,104 @@
 
 By the end of this module, you will be able to:
 
-- Understand the core concepts of Cost Tracking and Optimization
-- Set up and configure the required tools and environments
-- Complete hands-on exercises that demonstrate practical skills
-- Apply these skills in real-world scenarios
-- Pass the module validation to prove your understanding
+- Track token usage and costs per model, endpoint, and user in real time
+- Calculate per-request costs using model-specific pricing tables
+- Set up budget alerts and per-user spending limits
+- Identify cost optimization opportunities (caching, model selection, prompt efficiency)
+- Generate cost reports that inform engineering and business decisions
 
 ---
 
 ## Concepts
 
-### What is Cost Tracking and Optimization?
+### Why Cost Tracking Matters
 
-Cost Tracking and Optimization is a fundamental component of LLMOps CI/CD: Zero to Hero. In production environments, this skill is used daily by engineers to build, deploy, and maintain reliable systems.
+LLM costs are variable and can spike unexpectedly. Unlike traditional infrastructure with fixed monthly costs, LLM applications pay per token:
 
-**Real-world analogy:** Think of Cost Tracking and Optimization like learning to read a map before navigating a city. Once you understand the fundamentals, you can find your way through any complex system.
+- A single GPT-4 request with a long context can cost $0.30+
+- A prompt regression that doubles output length doubles your cost
+- A traffic spike on an unoptimized endpoint can burn through a monthly budget in hours
+- Without tracking, you will not know which endpoints or users are driving costs
 
-### Why Does This Matter?
+### Token Pricing Model
 
-Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
-- Deploy thousands of times per day
-- Maintain 99.99% uptime
-- Scale to millions of users
-- Recover from failures in minutes
+LLM providers charge separately for input (prompt) and output (completion) tokens:
+
+```
+Cost = (prompt_tokens / 1M * input_price) + (completion_tokens / 1M * output_price)
+```
+
+Example for GPT-4o with 1,000 prompt tokens and 300 completion tokens:
+
+```
+Input:  1,000 / 1,000,000 * $2.50 = $0.0025
+Output:   300 / 1,000,000 * $10.00 = $0.0030
+Total:                               $0.0055
+```
+
+### Model Pricing Comparison
+
+| Model | Input (per 1M tokens) | Output (per 1M tokens) | Best For |
+|---|---|---|---|
+| gpt-4o | $2.50 | $10.00 | High-quality, complex tasks |
+| gpt-4o-mini | $0.15 | $0.60 | Most production workloads |
+| gpt-4-turbo | $10.00 | $30.00 | Legacy, avoid for new work |
+| gpt-3.5-turbo | $0.50 | $1.50 | Simple tasks, high volume |
+| claude-3.5-sonnet | $3.00 | $15.00 | Long context, complex reasoning |
+| claude-3-haiku | $0.25 | $1.25 | Fast, cheap classification |
+
+### Cost Optimization Strategies
+
+#### 1. Model Selection (Biggest Impact)
+Route simple tasks to cheap models, complex tasks to expensive ones:
+
+```python
+def select_model(task_complexity: str) -> str:
+    if task_complexity == "simple":
+        return "gpt-4o-mini"      # $0.15/1M input
+    elif task_complexity == "complex":
+        return "gpt-4o"           # $2.50/1M input
+    else:
+        return "gpt-4o-mini"      # Default to cheap
+```
+
+#### 2. Response Caching
+Cache identical or near-identical requests in Redis:
+
+```python
+cache_key = hashlib.sha256(f"{prompt}:{model}".encode()).hexdigest()
+cached = redis.get(cache_key)
+if cached:
+    return cached  # Free!
+response = call_llm(prompt, model)
+redis.setex(cache_key, 3600, response)  # Cache for 1 hour
+```
+
+#### 3. Prompt Efficiency
+Shorter prompts = fewer input tokens = lower cost:
+
+- Remove redundant instructions
+- Use concise system prompts
+- Set appropriate `max_tokens` limits
+- Use structured output formats that are token-efficient
+
+#### 4. Batch Processing
+Group requests and process them together where possible:
+
+- Batch classification of support tickets
+- Nightly summary generation instead of real-time
+- Pre-compute embeddings for known documents
 
 ### Key Terminology
 
 | Term | Definition |
 |---|---|
-| **Core concept 1** | The foundational building block of this module |
-| **Core concept 2** | How components interact and communicate |
-| **Core concept 3** | The pattern used for reliability and scale |
-| **Best practice** | The industry-standard approach to implementation |
+| **Token** | Smallest unit of text processed by an LLM (~0.75 words on average) |
+| **Prompt tokens** | Input tokens (the prompt you send) |
+| **Completion tokens** | Output tokens (the response you receive) |
+| **Cost per request** | Total cost of one API call (input + output tokens * price) |
+| **Budget alert** | Notification when spending approaches or exceeds a limit |
+| **Token budget** | Maximum number of tokens a single request is allowed to use |
 
 ---
 
@@ -51,77 +117,152 @@ Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
 
 ### Prerequisites Check
 
-Before starting, verify your environment:
-
 ```bash
-# Check Docker is running
-docker --version
-docker compose version
-
-# Check you have the project cloned
-ls modules/07-cost-tracking/
+python3 -c "from src.tracking.cost_tracker import CostTracker; print('Ready')"
 ```
 
-### Exercise 1: Setup and Configuration
+### Exercise 1: Record and Report Costs
 
-**Goal:** Get the foundation in place for this module.
+**Goal:** Track costs across multiple models and endpoints, then generate a report.
 
-**Step 1:** Review the starter files
-```bash
-ls modules/07-cost-tracking/lab/starter/
+```python
+from src.tracking.cost_tracker import CostTracker, BudgetConfig
+
+tracker = CostTracker(budget=BudgetConfig(
+    daily_limit_usd=50.0,
+    per_user_daily_limit_usd=5.0,
+))
+
+# Simulate a day of API usage across different endpoints
+import random
+
+endpoints = ["/api/summarize", "/api/classify", "/api/chat", "/api/analyze"]
+models = ["gpt-4o-mini", "gpt-4o", "gpt-4o-mini", "gpt-4o"]
+users = [f"user-{i}" for i in range(10)]
+
+for i in range(200):
+    endpoint_idx = random.randint(0, 3)
+    tracker.record(
+        model=models[endpoint_idx],
+        prompt_tokens=random.randint(100, 2000),
+        completion_tokens=random.randint(50, 500),
+        endpoint=endpoints[endpoint_idx],
+        user_id=random.choice(users),
+    )
+
+# Generate and print report
+report = tracker.get_report("today")
+print(CostTracker.format_report(report))
 ```
 
-**Step 2:** Set up the required environment
-```bash
-# Follow the specific setup for this module
-# Each command is explained below
-cd modules/07-cost-tracking/lab/starter/
+### Exercise 2: Budget Alerts
+
+**Goal:** Configure budget limits and observe alert behavior.
+
+```python
+from src.tracking.cost_tracker import CostTracker, BudgetConfig
+
+# Tight budget for testing
+tracker = CostTracker(budget=BudgetConfig(
+    daily_limit_usd=0.10,
+    alert_threshold_pct=0.5,  # Alert at 50% of budget
+    per_user_daily_limit_usd=0.05,
+))
+
+# Simulate expensive requests that will trigger alerts
+for i in range(20):
+    record = tracker.record(
+        model="gpt-4o",
+        prompt_tokens=5000,
+        completion_tokens=2000,
+        endpoint="/api/analyze",
+        user_id="big-spender",
+    )
+
+# Check alerts
+report = tracker.get_report("today")
+print(f"Total cost: ${report.total_cost_usd:.4f}")
+print(f"Budget remaining: ${report.budget_remaining_usd:.4f}")
+print(f"\nAlerts ({len(report.alerts)}):")
+for alert in report.alerts:
+    print(f"  {alert}")
 ```
 
-**Step 3:** Verify the setup
-```bash
-# Run the validation to check your setup
-bash modules/07-cost-tracking/validation/validate.sh
+### Exercise 3: Cost Optimization Analysis
+
+**Goal:** Use the optimization tips feature to find savings opportunities.
+
+```python
+from src.tracking.cost_tracker import CostTracker
+
+tracker = CostTracker()
+
+# Simulate a pattern with optimization opportunities:
+# 1. Heavy use of expensive model for simple tasks
+# 2. High completion-to-prompt ratio (over-generation)
+# 3. Repeated calls to the same endpoint
+
+for i in range(200):
+    tracker.record(
+        model="gpt-4o",             # Expensive model for everything
+        prompt_tokens=200,           # Short prompt
+        completion_tokens=1500,      # Very long output (over-generation)
+        endpoint="/api/classify",    # Same endpoint repeated (caching opportunity)
+        user_id="automated-system",
+    )
+
+tips = tracker.get_optimization_tips()
+print("Cost Optimization Tips:")
+for i, tip in enumerate(tips, 1):
+    print(f"  {i}. {tip}")
 ```
 
-**What you should see:** The validation script will show PASS for setup-related checks.
+### Exercise 4: Model Cost Comparison
 
-### Exercise 2: Core Implementation
+**Goal:** Compare the cost of serving the same workload with different models.
 
-**Goal:** Implement the main concept of this module.
+```python
+from src.tracking.cost_tracker import CostTracker, MODEL_PRICING
 
-Follow the detailed instructions in the starter directory. The solution directory contains the reference implementation if you get stuck.
+# Simulate the same 100 requests with different models
+workload = [
+    {"prompt_tokens": random.randint(200, 1500), "completion_tokens": random.randint(100, 500)}
+    for _ in range(100)
+]
 
-**Key points:**
-- Read each instruction carefully before executing
-- Understand WHY each step is needed, not just WHAT to do
-- If something fails, check the troubleshooting section below
+print(f"{'Model':<20} {'Total Cost':>12} {'Avg Cost/Req':>15} {'Savings vs GPT-4o':>18}")
+print("-" * 70)
 
-### Exercise 3: Integration and Testing
+baseline_cost = None
+for model_name in ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", "claude-3-haiku"]:
+    tracker = CostTracker()
+    for w in workload:
+        tracker.record(model_name, w["prompt_tokens"], w["completion_tokens"])
 
-**Goal:** Connect this module's work with the broader system.
+    report = tracker.get_report("all")
+    avg_cost = report.total_cost_usd / report.total_requests
+    if baseline_cost is None:
+        baseline_cost = report.total_cost_usd
+    savings = (1 - report.total_cost_usd / baseline_cost) * 100
 
-- Verify your implementation works with previous modules
-- Run all tests and validation scripts
-- Document what you learned
+    print(f"{model_name:<20} ${report.total_cost_usd:>10.4f} ${avg_cost:>13.6f} {savings:>16.1f}%")
+```
 
 ---
 
 ## Starter Files
 
 Check `lab/starter/` for:
-- Configuration templates to fill in
-- Skeleton code to complete
-- Setup scripts to run
+- Skeleton CostTracker class
+- Pricing data JSON
+- Budget configuration templates
 
 ## Solution Files
 
 If you get stuck, `lab/solution/` contains:
-- Complete working configuration
-- Fully implemented code
-- Expected output examples
-
-> **Important:** Try to complete the exercises yourself first! Looking at solutions too early reduces learning.
+- Complete CostTracker implementation
+- Working budget alert system
+- Cost comparison scripts
 
 ---
 
@@ -129,32 +270,31 @@ If you get stuck, `lab/solution/` contains:
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Skipping prerequisites | Module exercises fail | Complete previous modules first |
-| Copy-pasting without understanding | Cannot troubleshoot issues | Read explanations, not just commands |
-| Not checking validation | Think you are done but are not | Run validate.sh after each exercise |
-| Ignoring error messages | Problems compound | Read errors carefully, they tell you what is wrong |
+| Not tracking completion tokens separately | Underestimating costs (output tokens cost more) | Always record both prompt and completion counts |
+| Using the same model for all tasks | 10-100x overspending on simple tasks | Route by complexity: cheap models for classification, expensive for generation |
+| No budget alerts | Surprise bills at end of month | Set daily and per-user limits from day one |
+| Ignoring caching opportunities | Paying for identical requests | Cache responses in Redis with TTL |
+| Estimating costs from local testing | Production costs are 10-100x higher | Track real production usage, not dev estimates |
 
 ---
 
 ## Self-Check Questions
 
-Test your understanding before moving on:
-
-1. What is the main purpose of Cost Tracking and Optimization?
-2. How does this connect to the previous module?
-3. What would happen in production without this?
-4. Can you explain this concept to a non-technical person?
-5. What are three things that could go wrong, and how would you fix them?
+1. What is the cost difference between using gpt-4o-mini and gpt-4o for 1 million input tokens?
+2. Why do output tokens cost more than input tokens?
+3. How would you implement response caching for an LLM endpoint?
+4. What is the single most impactful cost optimization for most LLM applications?
+5. How would you design a per-user rate limiting system based on cost?
 
 ---
 
 ## You Know You Have Completed This Module When...
 
-- [ ] All exercises completed
+- [ ] Tracked costs across multiple models and endpoints
+- [ ] Configured budget alerts and observed them trigger
+- [ ] Ran the optimization analysis and understood each recommendation
+- [ ] Compared costs across different models for the same workload
 - [ ] Validation script passes: `bash modules/07-cost-tracking/validation/validate.sh`
-- [ ] You can explain the concepts without looking at notes
-- [ ] You understand how this applies to real-world scenarios
-- [ ] Self-check questions answered confidently
 
 ---
 
@@ -162,24 +302,17 @@ Test your understanding before moving on:
 
 ### Common Issues
 
-**Issue: Validation script fails**
-- Re-read the exercise instructions
-- Check that Docker containers are running
-- Verify you are in the correct directory
-- Compare your work with the solution files
+**Issue: All costs showing as $0.00**
+- Verify the model name matches the pricing table keys exactly (e.g., "gpt-4o" not "GPT-4o")
+- Check that prompt_tokens and completion_tokens are not zero
 
-**Issue: Docker container not starting**
-```bash
-docker compose logs <service-name>  # Check logs
-docker compose down && docker compose up -d  # Restart
-```
+**Issue: Budget alerts not firing**
+- Verify your daily_limit_usd is low enough to be exceeded by your test data
+- Check that records have timestamps within today's date range
 
-**Issue: Permission denied**
-```bash
-chmod +x validation/validate.sh  # Make script executable
-sudo chown -R $USER .           # Fix ownership (Linux)
-```
+**Issue: Optimization tips showing "No usage data"**
+- Make sure you have recorded at least one request before calling `get_optimization_tips()`
 
 ---
 
-**Next: [Module 08 →](../08-observability/)**
+**Next: [Module 08 - LLM Observability and Tracing -->](../08-observability/)**

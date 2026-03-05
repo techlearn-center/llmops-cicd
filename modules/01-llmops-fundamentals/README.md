@@ -4,7 +4,7 @@
 |---|---|
 | **Time** | 3-5 hours |
 | **Difficulty** | Beginner |
-| **Prerequisites** | Docker installed, basic terminal knowledge |
+| **Prerequisites** | Docker installed, basic Python knowledge, familiarity with REST APIs |
 
 ---
 
@@ -12,38 +12,68 @@
 
 By the end of this module, you will be able to:
 
-- Understand the core concepts of LLMOps Fundamentals
-- Set up and configure the required tools and environments
-- Complete hands-on exercises that demonstrate practical skills
-- Apply these skills in real-world scenarios
-- Pass the module validation to prove your understanding
+- Explain how LLM CI/CD differs from traditional ML pipelines and classical software CI/CD
+- Identify the unique challenges of deploying and maintaining LLM-powered applications
+- Set up a local development environment with Docker, PostgreSQL, and Redis
+- Describe the end-to-end lifecycle of a prompt from authoring to production
+- Map LLMOps concepts to the tools and workflows used in the rest of this course
 
 ---
 
 ## Concepts
 
-### What is LLMOps Fundamentals?
+### What is LLMOps?
 
-LLMOps Fundamentals is a fundamental component of LLMOps CI/CD: Zero to Hero. In production environments, this skill is used daily by engineers to build, deploy, and maintain reliable systems.
+LLMOps (Large Language Model Operations) is the set of practices, tools, and workflows for deploying, monitoring, and maintaining LLM-based applications in production. It extends traditional MLOps with concerns that are unique to large language models:
 
-**Real-world analogy:** Think of LLMOps Fundamentals like learning to read a map before navigating a city. Once you understand the fundamentals, you can find your way through any complex system.
+- **Prompts are code.** Unlike traditional ML where the model artifact is the primary deliverable, LLM applications are driven by prompt templates that change frequently and need version control, testing, and review just like source code.
+- **Evaluation is subjective.** Classification models have accuracy and F1 scores. LLM outputs require multi-dimensional evaluation: relevance, coherence, toxicity, faithfulness, and domain-specific correctness.
+- **Costs scale with usage.** Every API call costs real money. A poorly-optimized prompt or a missing cache can turn a $50/day service into a $5,000/day one overnight.
+- **Non-determinism is the norm.** The same prompt can produce different outputs on successive calls. Testing must account for variance rather than expecting exact matches.
 
-### Why Does This Matter?
+**Real-world analogy:** Traditional CI/CD is like a factory assembly line: same inputs, same outputs, predictable quality. LLMOps is like managing a team of expert consultants: each response is unique, quality varies, you need clear evaluation criteria, and you pay per consultation.
 
-Companies like Google, Netflix, Amazon, and Meta rely on these practices to:
-- Deploy thousands of times per day
-- Maintain 99.99% uptime
-- Scale to millions of users
-- Recover from failures in minutes
+### How LLM CI/CD Differs from Traditional ML
+
+| Dimension | Traditional ML CI/CD | LLM CI/CD |
+|---|---|---|
+| **Primary artifact** | Trained model (.pkl, .pt) | Prompt templates + model config |
+| **Training** | Hours/days of GPU compute | No training; prompt engineering |
+| **Testing** | Deterministic assertions | Fuzzy matching, LLM-as-judge |
+| **Versioning** | Model weights + features | Prompt text + parameters + model version |
+| **Cost model** | Fixed infra cost | Pay-per-token, variable |
+| **Rollback** | Swap model artifact | Swap prompt version + model routing |
+| **Evaluation** | Accuracy, precision, recall | Relevance, coherence, toxicity, faithfulness |
+| **Data drift** | Feature distribution shifts | User query distribution shifts |
+
+### The LLMOps Lifecycle
+
+```
+ 1. Author       2. Version       3. Test          4. Deploy
+ ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+ │  Write   │──▶│  Store   │──▶│ Evaluate │──▶│  Canary  │
+ │  prompt  │   │  in DB   │   │  offline  │   │  deploy  │
+ └──────────┘   └──────────┘   └──────────┘   └──────────┘
+                                                     │
+ 8. Iterate      7. Optimize     6. Monitor      5. Serve
+ ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+ │  Update  │◀──│  Reduce  │◀──│  Track   │◀──│  Route   │
+ │  prompt  │   │  costs   │   │  quality │   │  traffic │
+ └──────────┘   └──────────┘   └──────────┘   └──────────┘
+```
 
 ### Key Terminology
 
 | Term | Definition |
 |---|---|
-| **Core concept 1** | The foundational building block of this module |
-| **Core concept 2** | How components interact and communicate |
-| **Core concept 3** | The pattern used for reliability and scale |
-| **Best practice** | The industry-standard approach to implementation |
+| **Prompt template** | A parameterized string sent to the LLM, e.g., `Summarize this article: {text}` |
+| **Prompt version** | A specific revision of a prompt template, identified by a semantic version string |
+| **Evaluation metric** | A quantitative measure of output quality (accuracy, relevance, toxicity, etc.) |
+| **Canary deployment** | Routing a small percentage of traffic to a new version while monitoring for regressions |
+| **Token** | The atomic unit of text processed by an LLM; both input and output tokens cost money |
+| **LLM-as-judge** | Using one LLM to evaluate the output of another, with structured scoring criteria |
+| **Prompt regression** | When a prompt change degrades output quality on existing test cases |
+| **Traffic splitting** | Dividing user requests between multiple model/prompt versions for comparison |
 
 ---
 
@@ -58,68 +88,144 @@ Before starting, verify your environment:
 docker --version
 docker compose version
 
+# Check Python
+python3 --version   # Should be 3.11+
+
 # Check you have the project cloned
 ls modules/01-llmops-fundamentals/
 ```
 
-### Exercise 1: Setup and Configuration
+### Exercise 1: Set Up the LLMOps Development Environment
 
-**Goal:** Get the foundation in place for this module.
+**Goal:** Get the Docker-based development stack running locally.
 
-**Step 1:** Review the starter files
+**Step 1:** Copy the environment configuration
+
 ```bash
-ls modules/01-llmops-fundamentals/lab/starter/
+# From the repo root
+cp .env.example .env
+
+# Edit .env and add your OpenAI API key (optional for Module 01)
+# OPENAI_API_KEY=sk-your-key-here
 ```
 
-**Step 2:** Set up the required environment
+**Step 2:** Start the infrastructure services
+
 ```bash
-# Follow the specific setup for this module
-# Each command is explained below
-cd modules/01-llmops-fundamentals/lab/starter/
+docker compose up -d postgres redis
 ```
 
-**Step 3:** Verify the setup
+**Step 3:** Verify the services are healthy
+
 ```bash
-# Run the validation to check your setup
-bash modules/01-llmops-fundamentals/validation/validate.sh
+# PostgreSQL
+docker compose exec postgres pg_isready -U llmops
+# Expected: /var/run/postgresql:5432 - accepting connections
+
+# Redis
+docker compose exec redis redis-cli ping
+# Expected: PONG
 ```
 
-**What you should see:** The validation script will show PASS for setup-related checks.
+**What you should see:** Both services report healthy status. PostgreSQL accepts connections and Redis responds with PONG.
 
-### Exercise 2: Core Implementation
+### Exercise 2: Explore the Prompt Store
 
-**Goal:** Implement the main concept of this module.
+**Goal:** Understand how prompts are versioned by interacting with the prompt store directly.
 
-Follow the detailed instructions in the starter directory. The solution directory contains the reference implementation if you get stuck.
+**Step 1:** Open a Python shell and create your first versioned prompt
 
-**Key points:**
-- Read each instruction carefully before executing
-- Understand WHY each step is needed, not just WHAT to do
-- If something fails, check the troubleshooting section below
+```python
+from src.versioning.prompt_store import PromptStore
 
-### Exercise 3: Integration and Testing
+store = PromptStore()
 
-**Goal:** Connect this module's work with the broader system.
+# Save version 1.0
+v1 = store.save(
+    "summarizer",
+    "Summarize the following text in one paragraph:\n\n{text}",
+    author="your-name",
+    description="Initial summarizer prompt",
+    tags=["dev"],
+)
+print(f"Created: {v1.name} v{v1.version}")
+```
 
-- Verify your implementation works with previous modules
-- Run all tests and validation scripts
-- Document what you learned
+**Step 2:** Create a second version and compare
+
+```python
+# Save version 1.1 with an improved template
+v2 = store.save(
+    "summarizer",
+    "You are a professional editor. Summarize the following text in exactly "
+    "3 bullet points, focusing on the key takeaways:\n\n{text}",
+    author="your-name",
+    description="Switched to bullet-point format",
+    tags=["dev", "experiment"],
+)
+print(f"Created: {v2.name} v{v2.version}")
+
+# Compare the two versions
+diff = store.compare("summarizer", "1.0", "1.1")
+print(f"Template changed: {diff.template_changed}")
+print(f"Variables added: {diff.variables_added}")
+print(f"Variables removed: {diff.variables_removed}")
+```
+
+**Step 3:** List all versions
+
+```python
+versions = store.list_versions("summarizer")
+for v in versions:
+    print(f"  v{v.version} by {v.author} - {v.description} (tags: {v.tags})")
+```
+
+### Exercise 3: Run a Basic Evaluation
+
+**Goal:** Execute the evaluation pipeline in offline mode to understand how prompt testing works.
+
+```python
+import asyncio
+from src.evaluation.eval_pipeline import EvalPipeline, TestCase
+
+pipeline = EvalPipeline()  # No API key = offline mock mode
+
+cases = [
+    TestCase(
+        input_text="AI is transforming healthcare with faster diagnostics.",
+        expected_output="AI improves healthcare through faster diagnostics.",
+    ),
+    TestCase(
+        input_text="Explain the benefits of renewable energy.",
+        expected_output="Renewable energy reduces emissions and is sustainable.",
+    ),
+]
+
+report = asyncio.run(
+    pipeline.run_evaluation(
+        prompt_name="summarizer",
+        test_cases=cases,
+        metrics=["accuracy", "relevance", "toxicity"],
+    )
+)
+print(EvalPipeline.generate_report(report))
+```
 
 ---
 
 ## Starter Files
 
 Check `lab/starter/` for:
-- Configuration templates to fill in
-- Skeleton code to complete
-- Setup scripts to run
+- Environment configuration template
+- Python script skeletons for the exercises above
+- Docker Compose override for development
 
 ## Solution Files
 
 If you get stuck, `lab/solution/` contains:
-- Complete working configuration
-- Fully implemented code
+- Complete working scripts for all three exercises
 - Expected output examples
+- Notes on common variations
 
 > **Important:** Try to complete the exercises yourself first! Looking at solutions too early reduces learning.
 
@@ -129,10 +235,10 @@ If you get stuck, `lab/solution/` contains:
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Skipping prerequisites | Module exercises fail | Complete previous modules first |
-| Copy-pasting without understanding | Cannot troubleshoot issues | Read explanations, not just commands |
-| Not checking validation | Think you are done but are not | Run validate.sh after each exercise |
-| Ignoring error messages | Problems compound | Read errors carefully, they tell you what is wrong |
+| Forgetting to start Docker services | Connection refused errors | Run `docker compose up -d postgres redis` |
+| Using Python 3.9 or earlier | Import errors with `list[str]` syntax | Upgrade to Python 3.11+ |
+| Not copying `.env.example` to `.env` | Missing environment variables | Run `cp .env.example .env` |
+| Trying to run evaluation with API key in offline mode | Mock outputs instead of real ones | This is expected for Module 01; real API calls come later |
 
 ---
 
@@ -140,21 +246,21 @@ If you get stuck, `lab/solution/` contains:
 
 Test your understanding before moving on:
 
-1. What is the main purpose of LLMOps Fundamentals?
-2. How does this connect to the previous module?
-3. What would happen in production without this?
-4. Can you explain this concept to a non-technical person?
-5. What are three things that could go wrong, and how would you fix them?
+1. Name three ways LLM CI/CD differs from traditional software CI/CD.
+2. Why do prompts need version control if they are just text strings?
+3. What is a prompt regression and why is it harder to detect than a software bug?
+4. What are the main cost drivers in an LLM application?
+5. Explain the LLMOps lifecycle in your own words. Which stage is most error-prone and why?
 
 ---
 
 ## You Know You Have Completed This Module When...
 
-- [ ] All exercises completed
+- [ ] Docker services (PostgreSQL + Redis) are running locally
+- [ ] You can create, retrieve, and compare prompt versions using the PromptStore
+- [ ] You have run the evaluation pipeline in offline mode and can read the report
 - [ ] Validation script passes: `bash modules/01-llmops-fundamentals/validation/validate.sh`
-- [ ] You can explain the concepts without looking at notes
-- [ ] You understand how this applies to real-world scenarios
-- [ ] Self-check questions answered confidently
+- [ ] You can explain how LLMOps differs from traditional MLOps to a colleague
 
 ---
 
@@ -162,24 +268,27 @@ Test your understanding before moving on:
 
 ### Common Issues
 
-**Issue: Validation script fails**
-- Re-read the exercise instructions
-- Check that Docker containers are running
-- Verify you are in the correct directory
-- Compare your work with the solution files
-
-**Issue: Docker container not starting**
+**Issue: Docker Compose version mismatch**
 ```bash
-docker compose logs <service-name>  # Check logs
-docker compose down && docker compose up -d  # Restart
+# If you see errors about "version" in docker-compose.yml
+docker compose version  # Must be v2+
+# If using older Docker, install Docker Compose V2
 ```
 
-**Issue: Permission denied**
+**Issue: Port 5432 already in use**
 ```bash
-chmod +x validation/validate.sh  # Make script executable
-sudo chown -R $USER .           # Fix ownership (Linux)
+# Find and stop the conflicting service
+lsof -i :5432
+# Or change the port in docker-compose.yml
+```
+
+**Issue: Python import errors**
+```bash
+# Make sure you are running from the repo root
+cd llmops-cicd
+python -c "from src.versioning.prompt_store import PromptStore; print('OK')"
 ```
 
 ---
 
-**Next: [Module 02 →](../02-prompt-versioning/)**
+**Next: [Module 02 - Prompt Versioning and Management -->](../02-prompt-versioning/)**
